@@ -655,16 +655,30 @@ export default {
                 // Clear all messages after this one
                 await threads.redoMessageFromThread(threadId, message.id)
 
-                // Extract the actual message content (remove media indicators if present)
+                // Extract the actual message content
                 let messageContent = message.content
-                // Remove media indicators like [🖼️ filename] or [🔉 filename] or [📎 filename]
-                messageContent = messageContent.replace(/\n\n\[[🖼️🔉📎] [^\]]+\]$/, '')
+
+                // Handle attachments if they exist in the message
+                if (message.attachments && message.attachments.length > 0) {
+                    // Reconstruct File objects from stored attachments
+                    const reconstructedFiles = []
+                    for (const attachment of message.attachments) {
+                        // Convert data URI back to File object
+                        const response = await fetch(attachment.dataUri)
+                        const blob = await response.blob()
+                        const file = new File([blob], attachment.name, { type: attachment.type })
+                        reconstructedFiles.push(file)
+                    }
+                    chatPrompt.attachedFiles.value = reconstructedFiles
+                } else {
+                    // Legacy message: remove media indicators if present
+                    messageContent = messageContent.replace(/\n\n\[[🖼️🔉📎] [^\]]+\]$/, '')
+                    // Clear any attached files since we're re-running a text-only message
+                    chatPrompt.attachedFiles.value = []
+                }
 
                 // Set the message text in the chat prompt
                 chatPrompt.messageText.value = messageContent
-
-                // Clear any attached files since we're re-running
-                chatPrompt.attachedFiles.value = []
 
                 // Trigger send by simulating the send action
                 // We'll use a small delay to ensure the UI updates

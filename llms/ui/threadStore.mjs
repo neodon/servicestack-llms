@@ -190,14 +190,19 @@ async function calculateThreadStats(threadId) {
 }
 
 // Add message to thread
-async function addMessageToThread(threadId, message, usage) {
+async function addMessageToThread(threadId, message, usage, attachments = null) {
     const thread = await getThread(threadId)
     if (!thread) throw new Error('Thread not found')
-    
+
     const newMessage = {
         id: nextId(),
         timestamp: new Date().toISOString(),
         ...message
+    }
+
+    // Store attachments if provided
+    if (attachments && attachments.length > 0) {
+        newMessage.attachments = attachments
     }
     
     // Add input and output token usage to previous 'input' message

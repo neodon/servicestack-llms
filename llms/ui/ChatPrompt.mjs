@@ -311,15 +311,36 @@ export default {
             errorStatus.value = null
 
             let message = messageText.value.trim()
+
+            // Convert attachments to data URIs for storage
+            let attachmentsToStore = null
             if (attachedFiles.value.length) {
-                const names = attachedFiles.value.map(f => f.name).join(', ')
-                const mediaType = imageExts.some(ext => names.includes(ext))
-                    ? '🖼️'
-                    : audioExts.some(ext => names.includes(ext))
-                        ? '🔉'
-                        : '📎'
-                message += `\n\n[${mediaType} ${names}]`
+                attachmentsToStore = []
+                for (const f of attachedFiles.value) {
+                    const ext = lastRightPart(f.name, '.')
+                    let attachmentType = 'file'
+                    let dataUri = null
+
+                    if (imageExts.includes(ext)) {
+                        attachmentType = 'image'
+                        dataUri = await fileToDataUri(f)
+                    } else if (audioExts.includes(ext)) {
+                        attachmentType = 'audio'
+                        dataUri = await fileToBase64(f)
+                    } else {
+                        attachmentType = 'file'
+                        dataUri = await fileToDataUri(f)
+                    }
+
+                    attachmentsToStore.push({
+                        name: f.name,
+                        type: f.type,
+                        dataUri: dataUri,
+                        attachmentType: attachmentType
+                    })
+                }
             }
+
             messageText.value = ''
 
             // Create AbortController for this request
@@ -355,7 +376,7 @@ export default {
                     await threads.addMessageToThread(threadId, {
                         role: 'user',
                         content: message
-                    })
+                    }, null, attachmentsToStore)
                     // Reload thread after adding message
                     thread = await threads.getThread(threadId)
                 }
@@ -392,52 +413,98 @@ export default {
                     }
                 }
 
-                if (hasImage()) {
+                // Use stored attachments from the message or current attachedFiles
+                const messageAttachments = thread.messages[thread.messages.length - 1]?.attachments
+                const hasStoredImages = messageAttachments?.some(a => a.attachmentType === 'image')
+                const hasStoredAudio = messageAttachments?.some(a => a.attachmentType === 'audio')
+                const hasStoredFiles = messageAttachments?.some(a => a.attachmentType === 'file')
+
+                if (hasImage() || hasStoredImages) {
                     const imageMessage = chatRequest.messages.find(m =>
                         m.role === 'user' && Array.isArray(m.content) && m.content.some(c => c.type === 'image_url'))
                     console.debug('hasImage', chatRequest, imageMessage)
                     if (imageMessage) {
                         const imgs = []
                         let imagePart = deepClone(imageMessage.content.find(c => c.type === 'image_url'))
-                        for (const f of attachedFiles.value) {
-                            if (imageExts.includes(lastRightPart(f.name, '.'))) {
-                                imagePart.image_url.url = await fileToDataUri(f)
+
+                        // Use stored attachments if available, otherwise use current files
+                        if (messageAttachments) {
+                            for (const attachment of messageAttachments) {
+                                if (attachment.attachmentType === 'image') {
+                                    const imgPart = deepClone(imagePart)
+                                    imgPart.image_url.url = attachment.dataUri
+                                    imgs.push(imgPart)
+                                }
                             }
-                            imgs.push(imagePart)
+                        } else {
+                            for (const f of attachedFiles.value) {
+                                if (imageExts.includes(lastRightPart(f.name, '.'))) {
+                                    const imgPart = deepClone(imagePart)
+                                    imgPart.image_url.url = await fileToDataUri(f)
+                                    imgs.push(imgPart)
+                                }
+                            }
                         }
                         imageMessage.content = imageMessage.content.filter(c => c.type !== 'image_url')
                         imageMessage.content = [...imgs, ...imageMessage.content]
                         setContentText(chatRequest, message)
                     }
 
-                } else if (hasAudio()) {
+                } else if (hasAudio() || hasStoredAudio) {
                     console.debug('hasAudio', chatRequest)
                     const audioMessage = chatRequest.messages.find(m =>
                         m.role === 'user' && Array.isArray(m.content) && m.content.some(c => c.type === 'input_audio'))
                     if (audioMessage) {
                         const audios = []
                         let audioPart = deepClone(audioMessage.content.find(c => c.type === 'input_audio'))
-                        for (const f of attachedFiles.value) {
-                            if (audioExts.includes(lastRightPart(f.name, '.'))) {
-                                audioPart.input_audio.data = await fileToBase64(f)
+
+                        // Use stored attachments if available, otherwise use current files
+                        if (messageAttachments) {
+                            for (const attachment of messageAttachments) {
+                                if (attachment.attachmentType === 'audio') {
+                                    const audPart = deepClone(audioPart)
+                                    audPart.input_audio.data = attachment.dataUri
+                                    audios.push(audPart)
+                                }
                             }
-                            audios.push(audioPart)
+                        } else {
+                            for (const f of attachedFiles.value) {
+                                if (audioExts.includes(lastRightPart(f.name, '.'))) {
+                                    const audPart = deepClone(audioPart)
+                                    audPart.input_audio.data = await fileToBase64(f)
+                                    audios.push(audPart)
+                                }
+                            }
                         }
                         audioMessage.content = audioMessage.content.filter(c => c.type !== 'input_audio')
                         audioMessage.content = [...audios, ...audioMessage.content]
                         setContentText(chatRequest, message)
                     }
-                } else if (attachedFiles.value.length) {
+                } else if (attachedFiles.value.length || hasStoredFiles) {
                     console.debug('hasFile', chatRequest)
                     const fileMessage = chatRequest.messages.find(m =>
                         m.role === 'user' && Array.isArray(m.content) && m.content.some(c => c.type === 'file'))
                     if (fileMessage) {
                         const files = []
                         let filePart = deepClone(fileMessage.content.find(c => c.type === 'file'))
-                        for (const f of attachedFiles.value) {
-                            filePart.file.file_data = await fileToDataUri(f)
-                            filePart.file.filename = f.name
-                            files.push(filePart)
+
+                        // Use stored attachments if available, otherwise use current files
+                        if (messageAttachments) {
+                            for (const attachment of messageAttachments) {
+                                if (attachment.attachmentType === 'file') {
+                                    const fPart = deepClone(filePart)
+                                    fPart.file.file_data = attachment.dataUri
+                                    fPart.file.filename = attachment.name
+                                    files.push(fPart)
+                                }
+                            }
+                        } else {
+                            for (const f of attachedFiles.value) {
+                                const fPart = deepClone(filePart)
+                                fPart.file.file_data = await fileToDataUri(f)
+                                fPart.file.filename = f.name
+                                files.push(fPart)
+                            }
                         }
                         fileMessage.content = fileMessage.content.filter(c => c.type !== 'file')
                         fileMessage.content = [...files, ...fileMessage.content]

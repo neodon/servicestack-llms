@@ -321,23 +321,32 @@ export default {
                     let attachmentType = 'file'
                     let dataUri = null
 
-                    // Always store as data: URI to be safely embeddable and consumable
                     if (imageExts.includes(ext)) {
                         attachmentType = 'image'
                         dataUri = await fileToDataUri(f)
+                        if (!dataUri || typeof dataUri !== 'string' || !dataUri.startsWith('data:')) {
+                            console.warn('Skipping invalid image attachment data URI', { name: f.name, type: f.type })
+                            continue
+                        }
                     } else if (audioExts.includes(ext)) {
                         attachmentType = 'audio'
-                        // Use data URI for audio instead of raw base64 to avoid invalid fetch() usage on redo
-                        dataUri = await fileToDataUri(f)
+                        // IMPORTANT:
+                        // For audio we must preserve the raw base64 format expected by the backend/input_audio.
+                        // Do NOT wrap as data: URI here, since that caused "Invalid audio: data:..." errors.
+                        const base64 = await fileToBase64(f)
+                        if (!base64 || typeof base64 !== 'string') {
+                            console.warn('Skipping invalid audio attachment base64', { name: f.name, type: f.type })
+                            continue
+                        }
+                        // Store as-is; this is intentionally NOT a data: URI.
+                        dataUri = base64
                     } else {
                         attachmentType = 'file'
                         dataUri = await fileToDataUri(f)
-                    }
-
-                    // Skip malformed results defensively
-                    if (!dataUri || typeof dataUri !== 'string' || !dataUri.startsWith('data:')) {
-                        console.warn('Skipping invalid attachment data URI', { name: f.name, type: f.type })
-                        continue
+                        if (!dataUri || typeof dataUri !== 'string' || !dataUri.startsWith('data:')) {
+                            console.warn('Skipping invalid file attachment data URI', { name: f.name, type: f.type })
+                            continue
+                        }
                     }
 
                     attachmentsToStore.push({
@@ -429,9 +438,15 @@ export default {
                 const messageAttachments = Array.isArray(thread.messages[thread.messages.length - 1]?.attachments)
                     ? thread.messages[thread.messages.length - 1].attachments
                     : null
-                const hasStoredImages = messageAttachments?.some(a => a && a.attachmentType === 'image' && typeof a.dataUri === 'string')
-                const hasStoredAudio = messageAttachments?.some(a => a && a.attachmentType === 'audio' && typeof a.dataUri === 'string')
-                const hasStoredFiles = messageAttachments?.some(a => a && a.attachmentType === 'file' && typeof a.dataUri === 'string')
+                const hasStoredImages = messageAttachments?.some(a =>
+                    a && a.attachmentType === 'image' && typeof a.dataUri === 'string' && a.dataUri.startsWith('data:')
+                )
+                const hasStoredAudio = messageAttachments?.some(a =>
+                    a && a.attachmentType === 'audio' && typeof a.dataUri === 'string'
+                )
+                const hasStoredFiles = messageAttachments?.some(a =>
+                    a && a.attachmentType === 'file' && typeof a.dataUri === 'string' && a.dataUri.startsWith('data:')
+                )
 
                 if (hasImage() || hasStoredImages) {
                     const imageMessage = chatRequest.messages.find(m =>
@@ -444,7 +459,9 @@ export default {
                         // Use stored attachments if available, otherwise use current files
                         if (messageAttachments) {
                             for (const attachment of messageAttachments) {
-                                if (attachment.attachmentType === 'image') {
+                                if (attachment.attachmentType === 'image'
+                                    && typeof attachment.dataUri === 'string'
+                                    && attachment.dataUri.startsWith('data:')) {
                                     const imgPart = deepClone(imagePart)
                                     imgPart.image_url.url = attachment.dataUri
                                     imgs.push(imgPart)
@@ -475,8 +492,10 @@ export default {
                         // Use stored attachments if available, otherwise use current files
                         if (messageAttachments) {
                             for (const attachment of messageAttachments) {
-                                if (attachment.attachmentType === 'audio') {
+                                if (attachment.attachmentType === 'audio'
+                                    && typeof attachment.dataUri === 'string') {
                                     const audPart = deepClone(audioPart)
+                                    // For audio, we expect raw base64; do not treat as URL.
                                     audPart.input_audio.data = attachment.dataUri
                                     audios.push(audPart)
                                 }
@@ -505,7 +524,9 @@ export default {
                         // Use stored attachments if available, otherwise use current files
                         if (messageAttachments) {
                             for (const attachment of messageAttachments) {
-                                if (attachment.attachmentType === 'file') {
+                                if (attachment.attachmentType === 'file'
+                                    && typeof attachment.dataUri === 'string'
+                                    && attachment.dataUri.startsWith('data:')) {
                                     const fPart = deepClone(filePart)
                                     fPart.file.file_data = attachment.dataUri
                                     fPart.file.filename = attachment.name

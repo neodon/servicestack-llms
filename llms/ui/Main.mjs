@@ -663,18 +663,46 @@ export default {
                     const reconstructedFiles = []
                     for (const attachment of message.attachments) {
                         try {
-                            if (!attachment || typeof attachment.dataUri !== 'string' || !attachment.dataUri.startsWith('data:')) {
+                            if (!attachment || typeof attachment.dataUri !== 'string') {
                                 console.warn('Skipping invalid stored attachment during redo', attachment)
                                 continue
                             }
-                            const response = await fetch(attachment.dataUri)
-                            const blob = await response.blob()
-                            const file = new File(
-                                [blob],
-                                attachment.name || 'attachment',
-                                { type: attachment.type || blob.type || '' }
-                            )
-                            reconstructedFiles.push(file)
+
+                            if (attachment.attachmentType === 'audio') {
+                                // Audio is stored as raw base64 for input_audio; do NOT use fetch() on it.
+                                // Decode base64 into a Blob, preserving original or inferred MIME type.
+                                const base64 = attachment.dataUri
+                                const contentType = attachment.type || 'audio/wav'
+                                // atob/btoa handle ASCII; this is sufficient for typical audio base64 payload.
+                                const binary = atob(base64)
+                                const len = binary.length
+                                const bytes = new Uint8Array(len)
+                                for (let i = 0; i < len; i++) {
+                                    bytes[i] = binary.charCodeAt(i)
+                                }
+                                const blob = new Blob([bytes], { type: contentType })
+                                const file = new File(
+                                    [blob],
+                                    attachment.name || 'audio',
+                                    { type: contentType }
+                                )
+                                reconstructedFiles.push(file)
+                            } else if (
+                                (attachment.attachmentType === 'image' || attachment.attachmentType === 'file')
+                                && attachment.dataUri.startsWith('data:')
+                            ) {
+                                // Images/files are stored as data: URIs; fetch is valid for these.
+                                const response = await fetch(attachment.dataUri)
+                                const blob = await response.blob()
+                                const file = new File(
+                                    [blob],
+                                    attachment.name || 'attachment',
+                                    { type: attachment.type || blob.type || '' }
+                                )
+                                reconstructedFiles.push(file)
+                            } else {
+                                console.warn('Skipping attachment with unsupported format during redo', attachment)
+                            }
                         } catch (e) {
                             console.error('Failed to reconstruct attachment during redo', e)
                         }

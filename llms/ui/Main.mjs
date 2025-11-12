@@ -659,20 +659,39 @@ export default {
                 let messageContent = message.content
 
                 // Handle attachments if they exist in the message
-                if (message.attachments && message.attachments.length > 0) {
-                    // Reconstruct File objects from stored attachments
+                if (Array.isArray(message.attachments) && message.attachments.length > 0) {
                     const reconstructedFiles = []
                     for (const attachment of message.attachments) {
-                        // Convert data URI back to File object
-                        const response = await fetch(attachment.dataUri)
-                        const blob = await response.blob()
-                        const file = new File([blob], attachment.name, { type: attachment.type })
-                        reconstructedFiles.push(file)
+                        try {
+                            if (!attachment || typeof attachment.dataUri !== 'string' || !attachment.dataUri.startsWith('data:')) {
+                                console.warn('Skipping invalid stored attachment during redo', attachment)
+                                continue
+                            }
+                            const response = await fetch(attachment.dataUri)
+                            const blob = await response.blob()
+                            const file = new File(
+                                [blob],
+                                attachment.name || 'attachment',
+                                { type: attachment.type || blob.type || '' }
+                            )
+                            reconstructedFiles.push(file)
+                        } catch (e) {
+                            console.error('Failed to reconstruct attachment during redo', e)
+                        }
                     }
-                    chatPrompt.attachedFiles.value = reconstructedFiles
+
+                    // Only set if we successfully reconstructed at least one attachment
+                    if (reconstructedFiles.length > 0) {
+                        chatPrompt.attachedFiles.value = reconstructedFiles
+                    } else {
+                        // Fall back to text-only if attachments are unusable
+                        chatPrompt.attachedFiles.value = []
+                    }
                 } else {
                     // Legacy message: remove media indicators if present
-                    messageContent = messageContent.replace(/\n\n\[[🖼️🔉📎] [^\]]+\]$/, '')
+                    if (typeof messageContent === 'string') {
+                        messageContent = messageContent.replace(/\n\n\[[🖼️🔉📎] [^\]]+\]$/, '')
+                    }
                     // Clear any attached files since we're re-running a text-only message
                     chatPrompt.attachedFiles.value = []
                 }

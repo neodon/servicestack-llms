@@ -317,27 +317,39 @@ export default {
             if (attachedFiles.value.length) {
                 attachmentsToStore = []
                 for (const f of attachedFiles.value) {
-                    const ext = lastRightPart(f.name, '.')
+                    const ext = lastRightPart(f.name, '.').toLowerCase()
                     let attachmentType = 'file'
                     let dataUri = null
 
+                    // Always store as data: URI to be safely embeddable and consumable
                     if (imageExts.includes(ext)) {
                         attachmentType = 'image'
                         dataUri = await fileToDataUri(f)
                     } else if (audioExts.includes(ext)) {
                         attachmentType = 'audio'
-                        dataUri = await fileToBase64(f)
+                        // Use data URI for audio instead of raw base64 to avoid invalid fetch() usage on redo
+                        dataUri = await fileToDataUri(f)
                     } else {
                         attachmentType = 'file'
                         dataUri = await fileToDataUri(f)
                     }
 
+                    // Skip malformed results defensively
+                    if (!dataUri || typeof dataUri !== 'string' || !dataUri.startsWith('data:')) {
+                        console.warn('Skipping invalid attachment data URI', { name: f.name, type: f.type })
+                        continue
+                    }
+
                     attachmentsToStore.push({
                         name: f.name,
-                        type: f.type,
-                        dataUri: dataUri,
-                        attachmentType: attachmentType
+                        type: f.type || '',
+                        dataUri,
+                        attachmentType
                     })
+                }
+
+                if (attachmentsToStore.length === 0) {
+                    attachmentsToStore = null
                 }
             }
 
@@ -414,10 +426,12 @@ export default {
                 }
 
                 // Use stored attachments from the message or current attachedFiles
-                const messageAttachments = thread.messages[thread.messages.length - 1]?.attachments
-                const hasStoredImages = messageAttachments?.some(a => a.attachmentType === 'image')
-                const hasStoredAudio = messageAttachments?.some(a => a.attachmentType === 'audio')
-                const hasStoredFiles = messageAttachments?.some(a => a.attachmentType === 'file')
+                const messageAttachments = Array.isArray(thread.messages[thread.messages.length - 1]?.attachments)
+                    ? thread.messages[thread.messages.length - 1].attachments
+                    : null
+                const hasStoredImages = messageAttachments?.some(a => a && a.attachmentType === 'image' && typeof a.dataUri === 'string')
+                const hasStoredAudio = messageAttachments?.some(a => a && a.attachmentType === 'audio' && typeof a.dataUri === 'string')
+                const hasStoredFiles = messageAttachments?.some(a => a && a.attachmentType === 'file' && typeof a.dataUri === 'string')
 
                 if (hasImage() || hasStoredImages) {
                     const imageMessage = chatRequest.messages.find(m =>
